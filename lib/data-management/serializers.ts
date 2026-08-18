@@ -168,7 +168,8 @@ export async function deserializeValue(value: unknown, resolver?: MediaResolver)
 // 旧实现对每条字符串做 JSON.stringify + new Blob 两次全量复制——大库（几百 MB 的
 // base64 媒体串）统计时瞬时内存冲到数据本身的 2~3 倍，移动端 Chrome 直接 OOM 杀页。
 // 统计用途不需要字节级精确，省掉引号/转义的出入无所谓。
-function utf8Bytes(text: string): number {
+// 导出侧也用它量模块 JSON 的大小——那里同样不能为了一个数字再复制一份几百 MB。
+export function utf8Bytes(text: string): number {
   let bytes = 0;
   for (let i = 0; i < text.length; i += 1) {
     const code = text.charCodeAt(i);

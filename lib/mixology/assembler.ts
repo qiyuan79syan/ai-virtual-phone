@@ -61,19 +61,33 @@ export type MixAssembledPrompt = {
     hasEncore: boolean;
 };
 
+function escapeForHtml(value: string): string {
+    return value
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+/**
+ * 替换 {{char}} / {{user}} / {{状态.X}}。
+ * escapeHtml：替换结果要插进 HTML（开场画布就是这种情况）时打开——
+ * 只转义被替换进去的那几个值，不动作者自己写的标签。代入名是玩家自己填的，
+ * 但一个叫「<b>」的名字照样能把画布的结构改坏，所以插进 HTML 前一律转义。
+ */
 export function applyMixMacros(
     text: string,
     charName: string,
     userName: string,
     state?: MixState,
+    options?: { escapeHtml?: boolean },
 ): string {
+    const esc = options?.escapeHtml ? escapeForHtml : (v: string) => v;
     const replaced = text
-        .replace(/\{\{\s*char\s*\}\}/gi, charName)
-        .replace(/\{\{\s*user\s*\}\}/gi, userName);
+        .replace(/\{\{\s*char\s*\}\}/gi, esc(charName))
+        .replace(/\{\{\s*user\s*\}\}/gi, esc(userName));
     // {{状态.好感度}}：取小票里勾了「记住」的值；没有这个值时整个宏留空，不留占位符
     return replaced.replace(/\{\{\s*状态\s*[.．。]\s*([^}]+?)\s*\}\}/g, (_all, name: string) => {
         const value = state?.[String(name).trim()];
-        return value === undefined ? "" : String(value);
+        return value === undefined ? "" : esc(String(value));
     });
 }
 

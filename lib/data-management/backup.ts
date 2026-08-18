@@ -2,7 +2,7 @@ import JSZip from "jszip";
 import { downloadFile, type DownloadFileOptions } from "../download-utils";
 import { DATA_MODULES } from "./modules";
 import { clearSource, exportSource, importSource, inspectSource } from "./idb";
-import { createMediaCollector, type MediaCollector, type MediaResolver } from "./serializers";
+import { createMediaCollector, estimateValueBytes, utf8Bytes, type MediaCollector, type MediaResolver } from "./serializers";
 import type {
   BackupEnvelope,
   BackupManifest,
@@ -198,40 +198,22 @@ export async function buildSingleModulePayload(
 }
 
 async function buildEnvelope(moduleIds?: DataModuleId[], options: BackupOptions = {}, collector?: MediaCollector): Promise<BackupEnvelope> {
-  const snapshot = await inspectData();
+  // 这里刻意不再调 inspectData()：它会把所有库完整读第二遍，只为拿几个统计数字。
+  // 记录数从 payload 自己数，字节数用零分配的 estimateValueBytes 量。
   const selectedModules = getSelectedModules(moduleIds);
   const modulePayloads: ModulePayload[] = [];
+  const manifestModules: BackupManifest["modules"] = [];
 
   for (const dataModule of selectedModules) {
-    const stripping = Boolean(options.excludeMedia) && !MEDIA_KEEP_MODULE_IDS.has(dataModule.id);
-    // Don't extract media for stripped modules — keep it as dataURL strings so
-    // stripMediaFromSource can actually remove it (it only recognises strings,
-    // not media-ref objects). Otherwise "exclude media" silently keeps everything.
-    const moduleCollector = stripping ? undefined : collector;
-    let sources = [];
-    for (const source of dataModule.sources) {
-      sources.push(await exportSource(source, moduleCollector));
-    }
-    if (stripping) {
-      sources = sources.map(stripMediaFromSource);
-    }
-    modulePayloads.push({ moduleId: dataModule.id, sources });
+    const built = await buildSingleModulePayload(dataModule, options, collector);
+    modulePayloads.push(built.payload);
+    manifestModules.push({
+      id: dataModule.id,
+      label: dataModule.label,
+      records: built.records,
+      bytes: estimateValueBytes(built.payload),
+    });
   }
-
-  const manifestModules = modulePayloads.map((payload) => {
-    const stats = snapshot.modules.find((item) => item.moduleId === payload.moduleId);
-    const definition = DATA_MODULES.find((item) => item.id === payload.moduleId);
-    // When media is stripped, recompute bytes from the actual (smaller) payload.
-    const bytes = options.excludeMedia
-      ? new Blob([JSON.stringify(payload)]).size
-      : stats?.bytes ?? 0;
-    return {
-      id: payload.moduleId,
-      label: definition?.label ?? payload.moduleId,
-      records: stats?.records ?? 0,
-      bytes,
-    };
-  });
 
   const manifest: BackupManifest = {
     format: "ai-phone-backup",
@@ -248,35 +230,122 @@ async function buildEnvelope(moduleIds?: DataModuleId[], options: BackupOptions 
   return { manifest, modules: modulePayloads };
 }
 
+/**
+ * 逐模块流式导出：读一个模块 → 序列化 → 立刻释放对象树 → 转成 Blob 交给 zip →
+ * 释放字符串 → 媒体随模块写进 zip → 下一个。云备份（cloud-backup/engine）早就是
+ * 这么走的，本地导出此前还是"全部模块读完再一起 stringify 再一起压"，峰值内存能到
+ * 数据本身的四五倍——大库用户点导出就闪退（移动端 WebKit 超限直接杀页，不报错）。
+ *
+ * 关键在于每一步都不让两份大数据同时活着：
+ *  - payload 置空后，JSON 字符串是唯一的一份；
+ *  - 字符串转成 Blob 后立刻丢掉引用：Blob 由浏览器托管（通常落盘），不占 JS 堆，
+ *    否则所有模块的 JSON 会一直堆在堆里直到 generateAsync；
+ *  - 媒体每模块写完即从 collector 里松手（zip 自己持有引用），不攒到最后。
+ */
 export async function createBackupBlob(moduleIds?: DataModuleId[], options: BackupOptions = {}): Promise<{ blob: Blob; manifest: BackupManifest; warnings: string[] }> {
-  const collector = createMediaCollector();
-  const envelope = await buildEnvelope(moduleIds, options, collector);
-  const warnings: string[] = [];
-  for (const modulePayload of envelope.modules) {
-    const definition = DATA_MODULES.find((item) => item.id === modulePayload.moduleId);
-    if (!definition) continue;
-    let records = 0;
-    for (const sourcePayload of modulePayload.sources) {
-      if (sourcePayload.type === "indexeddb") {
-        for (const store of sourcePayload.stores) records += store.records.length;
-      } else {
-        records += sourcePayload.records.length;
-      }
-    }
-    warnings.push(...collectModuleWarnings(definition, modulePayload, records));
-  }
   const zip = new JSZip();
-  zip.file("manifest.json", JSON.stringify(envelope.manifest, null, 2));
-  for (const modulePayload of envelope.modules) {
-    zip.file(`modules/${modulePayload.moduleId}.json`, JSON.stringify(modulePayload));
+  const selectedModules = getSelectedModules(moduleIds);
+  const warnings: string[] = [];
+  const manifestModules: BackupManifest["modules"] = [];
+  const writtenMedia = new Set<string>();
+  let totalRecords = 0;
+  let totalBytes = 0;
+
+  for (const dataModule of selectedModules) {
+    // 每模块一个 collector。媒体是按内容哈希寻址的，跨模块的同一张图仍然算出同一个
+    // ref，靠 writtenMedia 去重，不会因为拆开收集而在包里重复一份。
+    const collector = createMediaCollector();
+    const built = await buildSingleModulePayload(dataModule, options, collector);
+    warnings.push(...built.warnings);
+    totalRecords += built.records;
+
+    let json: string | null = JSON.stringify(built.payload);
+    built.payload = null as unknown as ModulePayload; // 释放对象树
+    const jsonBytes = utf8Bytes(json);
+    const moduleBlob = new Blob([json], { type: "application/json" });
+    json = null;                                      // 释放 JSON 字符串
+    zip.file(`modules/${dataModule.id}.json`, moduleBlob);
+
+    // 媒体单独存二进制条目，一个内容哈希一条。STORE：图片/音频本来就压过了，
+    // 再 DEFLATE 只烧 CPU 不省体积。
+    let mediaBytes = 0;
+    for (const [ref, mediaBlob] of collector.media) {
+      mediaBytes += mediaBlob.size;
+      if (writtenMedia.has(ref)) continue;
+      writtenMedia.add(ref);
+      zip.file(`media/${ref}.bin`, mediaBlob, { compression: "STORE" });
+    }
+    collector.media.clear();                          // zip 已持有引用，这里松手
+
+    manifestModules.push({
+      id: dataModule.id,
+      label: dataModule.label,
+      records: built.records,
+      bytes: jsonBytes + mediaBytes,
+    });
+    totalBytes += jsonBytes + mediaBytes;
   }
-  // Media lives out of the JSON as one binary entry per content hash (deduped). STORE:
-  // images/audio are already compressed, re-deflating wastes CPU for ~no gain.
-  for (const [ref, mediaBlob] of collector.media) {
-    zip.file(`media/${ref}.bin`, mediaBlob, { compression: "STORE" });
-  }
-  const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", mimeType: "application/zip" });
-  return { blob, manifest: envelope.manifest, warnings };
+
+  const manifest: BackupManifest = {
+    format: "ai-phone-backup",
+    version: BACKUP_FILE_VERSION,
+    createdAt: new Date().toISOString(),
+    origin: typeof window !== "undefined" ? window.location.origin : "",
+    modules: manifestModules,
+    totalBytes,
+    totalRecords,
+    ...(options.excludeMedia ? { mediaExcluded: true } : {}),
+  };
+  zip.file("manifest.json", JSON.stringify(manifest, null, 2));
+
+  const blob = await generateZipBlob(zip);
+  return { blob, manifest, warnings };
+}
+
+/** 攒到这个量就把已压好的字节交给浏览器托管，JS 堆立刻还回去。 */
+const ZIP_FLUSH_BYTES = 8 * 1024 * 1024;
+
+/**
+ * 流式收 zip 输出。generateAsync({type:"blob"}) 会把整个压缩结果先在 JS 堆里攒成
+ * 一片，几百 MB 的备份到这一步仍可能被系统杀页——前面省下来的全白省。改成边压边把
+ * 分片封进 Blob（浏览器通常落盘），堆里任何时刻只留最后不到 8MB。
+ */
+function generateZipBlob(zip: JSZip): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const parts: Blob[] = [];
+    // Cast 同 serializers.bytesToBlob：TS 5.7 把 Uint8Array 标成 <ArrayBufferLike>，
+    // BlobPart 要的是 <ArrayBuffer>。
+    let pending: BlobPart[] = [];
+    let pendingBytes = 0;
+
+    const flush = () => {
+      if (pendingBytes === 0) return;
+      parts.push(new Blob(pending));
+      pending = [];
+      pendingBytes = 0;
+    };
+
+    try {
+      zip.generateInternalStream({ type: "uint8array", compression: "DEFLATE" })
+        .on("data", (chunk: Uint8Array) => {
+          pending.push(chunk as unknown as BlobPart);
+          pendingBytes += chunk.length;
+          if (pendingBytes >= ZIP_FLUSH_BYTES) flush();
+        })
+        .on("error", (error: Error) => reject(error))
+        .on("end", () => {
+          flush();
+          resolve(new Blob(parts, { type: "application/zip" }));
+        })
+        .resume();
+    } catch (error) {
+      // 老版本 JSZip 没有 generateInternalStream 时退回一次性生成——慢且吃内存，
+      // 但总比导不出来强。
+      zip.generateAsync({ type: "blob", compression: "DEFLATE", mimeType: "application/zip" })
+        .then(resolve)
+        .catch(() => reject(error));
+    }
+  });
 }
 
 export async function readBackupBlob(blob: Blob): Promise<BackupEnvelope> {

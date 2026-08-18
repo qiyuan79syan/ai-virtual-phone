@@ -998,7 +998,7 @@ export function MixologyApp({ onClose }: { onClose: () => void }) {
                             <MixTagList tags={detail.tags} />
                             {/* 与酒材页同一套展示：角色卡点开看门面（画布/一句话介绍），设定正文进「编辑」看 */}
                             {detail.kind === "character" ? (
-                                <SealedNote hook={detail.hook} canvas={(detail as MixCharacterCard).canvas} />
+                                <SealedNote hook={detail.hook} canvas={(detail as MixCharacterCard).canvas} charName={(detail as MixCharacterCard).charName} />
                             ) : (
                                 <MaterialDetail material={detail} />
                             )}

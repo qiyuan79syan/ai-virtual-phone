@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { MixCharacterCard, MixMaterial, MixMaterialKind } from "@/lib/mixology/types";
 import { MIX_DOCK_LABELS, MIX_KIND_LABELS, mixEncoreRenderHtml, mixKindHasCover, mixKindRunsActiveCode, normalizeMixTags } from "@/lib/mixology/types";
+import { applyMixMacros, MIX_DEFAULT_USER_NAME } from "@/lib/mixology/assembler";
 import { MixRichText } from "./rich-text";
 
 const KIND_ICONS: Record<MixMaterialKind, typeof UserRound> = {
@@ -76,13 +77,15 @@ function TagLine({ tags, className }: { tags?: string[]; className: string }) {
     );
 }
 
-/** 详情弹窗里的完整标签：换行摊开，不省略 */
+/**
+ * 详情弹窗里的完整标签：换行摊开，不省略。
+ * 不带「标签」小标题——标签自己长得就像标签，再加一行字反而多余。
+ */
 export function MixTagList({ tags }: { tags?: string[] }) {
     const list = normalizeMixTags(tags);
     if (!list.length) return null;
     return (
         <div className="mix-detail-field">
-            <div className="mix-detail-label">标签</div>
             <div className="mix-tag-list">
                 {list.map((tag) => (
                     <span className="mix-tag" key={tag}>{tag}</span>
@@ -200,9 +203,11 @@ export function isSealedMaterial(material: { kind: string; imported?: boolean })
  * 别人的角色卡：设定正文不摊开，只留作者写给读者看的那两栏
  *（与应用市场、游戏大厅同规矩）。
  */
-export function SealedNote({ hook, canvas }: { hook?: string; canvas?: string }) {
+export function SealedNote({ hook, canvas, charName }: { hook?: string; canvas?: string; charName?: string }) {
     if (canvas?.trim()) {
-        return <div className="mix-canvas-block"><MixRichText text={canvas} /></div>;
+        // 详情页没有对局，{{user}} 没有代入名可用，退回默认的「你」
+        const filled = applyMixMacros(canvas, charName ?? "", MIX_DEFAULT_USER_NAME, undefined, { escapeHtml: true });
+        return <div className="mix-canvas-block"><MixRichText text={filled} /></div>;
     }
     return <DetailField label="一句话介绍" value={hook} />;
 }
@@ -258,7 +263,7 @@ export function MaterialDetail({ material }: { material: MixMaterial }) {
         return (
             <>
                 <DetailField label="一句话介绍" value={material.hook} />
-                <DetailField label="装饰 CSS" value={material.css} code />
+                <DetailField label="外观 CSS" value={material.css} code />
             </>
         );
     }

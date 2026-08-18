@@ -292,7 +292,7 @@ export function MixMaterialEditor({ kind, initial, onSave, onCancel }: EditorPro
         }
         if (kind === "garnish") {
             if (!css.trim()) {
-                setError("装饰不能是空的，写点 CSS 吧。");
+                setError("外观不能是空的，写点 CSS 吧。");
                 return;
             }
             onSave({ ...meta, kind: "garnish", css });

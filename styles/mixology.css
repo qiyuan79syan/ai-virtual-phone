@@ -1349,9 +1349,23 @@
     align-items: flex-end;
     gap: 8px;
     padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
-    background: rgba(11, 11, 16, 0.86);
-    backdrop-filter: blur(14px);
-    border-top: 1px solid var(--mix-line);
+    /*
+     * 透明质感：底下是角色封面，输入栏原来压了 86% 的实底，比正文区那层蒙版深出一大截，
+     * 遇上浅色封面就是横在底部的一条黑砖。改成上浅下深的薄纱，可读性交给毛玻璃，
+     * 而不是交给不透明度——上缘几乎接得住正文区的底，往下才慢慢沉下来托住输入框。
+     */
+    background: linear-gradient(180deg, rgba(11, 11, 16, 0.26) 0%, rgba(11, 11, 16, 0.55) 100%);
+    /* iOS 15.4 之前只认带前缀的写法，不写这一行在旧 Safari 上就是一块死底 */
+    -webkit-backdrop-filter: blur(22px) saturate(140%);
+    backdrop-filter: blur(22px) saturate(140%);
+    border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+/* 不支持毛玻璃的浏览器退回实底：没有模糊撑着，薄纱压不住浅色封面上的字 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .mix-game-inputbar {
+        background: rgba(11, 11, 16, 0.86);
+    }
 }
 
 .mix-game-input {

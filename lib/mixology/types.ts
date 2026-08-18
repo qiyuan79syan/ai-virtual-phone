@@ -14,7 +14,7 @@ export type MixMaterialKind =
     | "glass"     // 杯型：输出格式
     | "strength"  // 苦精：尾部强化（离生成最近、权重最高）
     | "ticket"    // 小票：状态数据卡（输出契约 + 渲染代码）
-    | "garnish"   // 装饰：界面美化 CSS
+    | "garnish"   // 外观：界面美化 CSS
     | "encore"    // 尾调：随卡互动 HTML 小品
     | "filter"    // 滤网：正则清洗正文（不进提示词）
     | "mechanism"; // 机括：沙盒里跑的钩子逻辑 + 常驻界面
@@ -27,7 +27,7 @@ export const MIX_KIND_LABELS: Record<MixMaterialKind, string> = {
     glass: "杯型",
     strength: "苦精",
     ticket: "小票",
-    garnish: "装饰",
+    garnish: "外观",
     encore: "尾调",
     filter: "滤网",
     mechanism: "机括",
@@ -38,7 +38,7 @@ export const MIX_SLOT_ORDER: MixMaterialKind[] = [
     "character", "persona", "base", "flavor", "glass", "strength", "ticket", "garnish", "encore", "filter", "mechanism",
 ];
 
-/** 每类材料在提示词里的正规段名（装饰不进提示词，标它的实际职责） */
+/** TAB 上大字下面那行小字：说明这一类到底干什么（不进提示词的种类标它的实际职责） */
 export const MIX_KIND_SECTION_LABELS: Record<MixMaterialKind, string> = {
     character: "角色资料",
     persona: "用户资料",
@@ -49,8 +49,8 @@ export const MIX_KIND_SECTION_LABELS: Record<MixMaterialKind, string> = {
     ticket: "状态栏",
     garnish: "界面样式",
     encore: "小剧场",
-    filter: "文本清洗",
-    mechanism: "机括",
+    filter: "正则替换",
+    mechanism: "可执行逻辑",
 };
 
 /** 必选槽：没配齐不能开局；其余槽可留空 */
@@ -234,7 +234,7 @@ export type MixTicketMaterial = MixMaterialMeta & {
     vars?: MixTicketVar[];
 };
 
-/** 装饰：对局界面美化（官方语义类 + 界面定位符的 CSS） */
+/** 外观：对局界面美化（官方语义类 + 界面定位符的 CSS） */
 export type MixGarnishMaterial = MixMaterialMeta & {
     kind: "garnish";
     css: string;

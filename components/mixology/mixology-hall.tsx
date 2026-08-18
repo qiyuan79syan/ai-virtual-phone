@@ -730,6 +730,7 @@ export function MixologyHall({
                                             ? <SealedNote
                                                 hook={detailMaterial.hook}
                                                 canvas={(detailMaterial.payload as MixCharacterCard).canvas}
+                                                charName={(detailMaterial.payload as MixCharacterCard).charName}
                                             />
                                             : <MaterialDetail material={detailMaterial.payload} />}
                                     </div>

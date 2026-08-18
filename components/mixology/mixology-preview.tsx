@@ -236,7 +236,7 @@ export function MixStructureSheet({ highlight, onClose }: { highlight?: string; 
 
                     <div className="mix-detail-label" style={{ marginTop: 16 }}>不进提示词的部分</div>
                     <div className="mix-struct-note" data-on={highlight === "filter" ? "true" : undefined}>
-                        <b>装饰</b>的 CSS、<b>小票与尾调</b>的渲染代码、<b>开场画布</b>都只在界面里执行，
+                        <b>外观</b>的 CSS、<b>小票与尾调</b>的渲染代码、<b>开场画布</b>都只在界面里执行，
                         不发给模型，写多长都不占上下文。<b>开场白</b>也不在系统提示词里，它作为对局的第一条角色消息单独送出。
                         <b>滤网</b>的正则规则在回复拆完状态栏/小剧场之后清洗正文——「仅显示」只影响渲染，
                         「进上下文」会洗过再入库（发回模型的历史随之变干净），两种都不进提示词。
