@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentAccount } from "@/lib/server/account-auth";
+import { getMixologySupabaseConfig, mixologyRestFetch } from "@/lib/server/mixology-supabase";
 
 // 独家特调 · 评论 API：材料与配方共用，target_type + target_id 定位，支持楼中楼。
 
@@ -12,21 +13,6 @@ const COUNT_TABLES: Record<HallType, string> = {
   material: "mixology_items",
   recipe: "mixology_recipes",
 };
-
-function getSupabaseConfig(): { url: string; key: string } | null {
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
-  if (!url || !key) return null;
-  return { url: url.replace(/\/$/, ""), key };
-}
-
-function supabaseHeaders(config: { key: string }): HeadersInit {
-  return {
-    apikey: config.key,
-    Authorization: `Bearer ${config.key}`,
-    "Content-Type": "application/json",
-  };
-}
 
 function cleanText(value: unknown, maxLength: number): string {
   return String(value ?? "").replace(/\u0000/g, "").trim().slice(0, maxLength);
@@ -62,39 +48,16 @@ async function supabaseFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<{ ok: true; data: T; status: number } | { ok: false; error: string; status: number }> {
-  const config = getSupabaseConfig();
-  if (!config) return { ok: false, error: "missing_supabase_env", status: 503 };
-  const response = await fetch(`${config.url}/rest/v1/${path}`, {
-    ...init,
-    headers: {
-      ...supabaseHeaders(config),
-      ...(init?.headers ?? {}),
-    },
-    cache: "no-store",
-  });
-  const text = await response.text();
-  let data: unknown = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
-    }
+  // 特调只走特调库：mixologyRestFetch 里没有主库 fallback
+  const result = await mixologyRestFetch<T>(path, init);
+  if (!result.ok && isMissingTableError(result.error)) {
+    return {
+      ok: false,
+      error: "独家特调共享表尚未创建：请先在特调 Supabase 项目的 SQL Editor 执行 docs/mixology-supabase.sql。",
+      status: result.status,
+    };
   }
-  if (!response.ok) {
-    const message = typeof data === "object" && data && "message" in data
-      ? String((data as { message?: unknown }).message)
-      : text || response.statusText;
-    if (isMissingTableError(message)) {
-      return {
-        ok: false,
-        error: "独家特调共享表尚未创建：请先在 Supabase SQL Editor 执行 docs/mixology-supabase.sql。",
-        status: response.status,
-      };
-    }
-    return { ok: false, error: message, status: response.status };
-  }
-  return { ok: true, data: data as T, status: response.status };
+  return result;
 }
 
 type HallComment = {
@@ -163,7 +126,7 @@ export async function GET(request: Request) {
     if (!result.ok) return NextResponse.json({ ok: false, error: result.error, comments: [] }, { status: result.status });
     return NextResponse.json({ ok: true, comments: result.data.map(normalizeComment).filter(Boolean) });
   } catch (err) {
-    return NextResponse.json({ ok: false, error: formatSupabaseError(err), comments: [] }, { status: getSupabaseConfig() ? 500 : 503 });
+    return NextResponse.json({ ok: false, error: formatSupabaseError(err), comments: [] }, { status: getMixologySupabaseConfig() ? 500 : 503 });
   }
 }
 
@@ -214,7 +177,7 @@ export async function POST(request: Request) {
     await syncCommentCount(type, targetId, 1);
     return NextResponse.json({ ok: true, comment });
   } catch (err) {
-    return NextResponse.json({ ok: false, error: formatSupabaseError(err) }, { status: getSupabaseConfig() ? 400 : 503 });
+    return NextResponse.json({ ok: false, error: formatSupabaseError(err) }, { status: getMixologySupabaseConfig() ? 400 : 503 });
   }
 }
 
@@ -293,6 +256,6 @@ export async function DELETE(request: Request) {
     await syncCommentCount(type, targetId, -deletedIds.length);
     return NextResponse.json({ ok: true, targetId, deletedIds });
   } catch (err) {
-    return NextResponse.json({ ok: false, error: formatSupabaseError(err) }, { status: getSupabaseConfig() ? 400 : 503 });
+    return NextResponse.json({ ok: false, error: formatSupabaseError(err) }, { status: getMixologySupabaseConfig() ? 400 : 503 });
   }
 }

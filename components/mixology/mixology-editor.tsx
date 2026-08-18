@@ -351,7 +351,8 @@ export function MixMaterialEditor({ kind, initial, onSave, onCancel }: EditorPro
                 <div className="mix-guide-what">{guide.what}</div>
                 <div className="mix-guide-where">{guide.where}</div>
                 <button type="button" className="mix-guide-link" onClick={() => setStructureOpen(true)}>
-                    <FileText size={12} style={{ verticalAlign: "-2px" }} /> 看看完整提示词结构
+                    <FileText size={12} />
+                    <span>看看完整提示词结构</span>
                 </button>
             </div>
             <Field label={isCharacter ? "角色名" : "名称"} hint="必填">

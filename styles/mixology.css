@@ -1651,12 +1651,29 @@
 
 .mix-guide-link {
     margin-top: 9px;
+    /*
+     * 图标和文字必须待在同一行：按 <button> 的默认排版，图标是行内元素，
+     * 一旦壳的默认样式（iOS Safari 的原生按钮外观）掺一脚就可能把它挤到上一行去。
+     * 用 inline-flex 把这一行的排布自己接管过来，间距交给 gap，再关掉原生外观。
+     */
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    -webkit-appearance: none;
+    appearance: none;
     border: none;
     background: none;
     padding: 0;
     color: var(--mix-violet);
     font-size: 11.5px;
+    text-align: left;
     cursor: pointer;
+}
+
+/* 图标不参与压缩：行宽不够时也不许它被挤扁 */
+.mix-guide-link svg {
+    flex: 0 0 auto;
 }
 
 .mix-struct-note {

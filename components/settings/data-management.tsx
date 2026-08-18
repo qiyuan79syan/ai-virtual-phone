@@ -10,6 +10,7 @@ import {
   Loader2,
   MessageCircle,
   Palette,
+  RotateCcw,
   Share2,
   ShieldCheck,
   Settings2,
@@ -34,6 +35,7 @@ import {
   saveCloudBackupConfig,
   type CloudBackupConfig,
 } from "@/lib/cloud-backup/config";
+import { getRuntimePwaDisplayMode } from "@/lib/pwa-display-mode";
 import { testCloudBackupConnection } from "@/lib/cloud-backup/storage-client";
 import { listCloudBackups, loadCloudBackupState, restoreFromCloudManifest, runCloudBackup, type CloudBackupListItem, type CloudBackupState } from "@/lib/cloud-backup/engine";
 import { CloudDownload } from "lucide-react";
@@ -255,6 +257,27 @@ function formatTime(value?: string): string {
   }
 }
 
+type RestartNotice = {
+  title: string;
+  summary: string;
+};
+
+/**
+ * 导入 / 云端恢复 / 清理之后必须彻底重启应用。
+ *
+ * kv 层（lib/kv-db.ts）是「IndexedDB + 同步内存缓存」：启动时把整张 kv 表读进内存，
+ * 之后所有读都只走内存。导入是直接写 IndexedDB 的，不会回灌这份内存缓存，所以留在
+ * 当前页面不仅看到的还是旧数据，接下来任何一次写入都会用内存里的旧值把刚恢复的数据
+ * 覆盖掉。以前只用一条 2.2 秒的 toast 提示「请刷新」，用户基本看不到，改成弹窗。
+ */
+function buildRestartMessage(summary: string): string {
+  const standalone = typeof window !== "undefined" && getRuntimePwaDisplayMode() !== "browser";
+  const howTo = standalone
+    ? "请彻底关闭应用（从系统后台任务列表里划掉），然后重新打开。"
+    : "请彻底重启应用：点下方按钮，或手动关掉页面重新进入。";
+  return `${summary}\n\n数据已经写进本机，但当前页面还在用重启前的旧缓存运行。${howTo}\n\n在重启之前继续使用，可能让旧缓存把刚导入的数据重新覆盖掉。`;
+}
+
 export function DataManagement({ onNotice }: DataManagementProps) {
   const [snapshot, setSnapshot] = useState<DataSnapshot | null>(null);
   const [selectedExportModules, setSelectedExportModules] = useState<DataModuleId[]>(ALL_MODULE_IDS);
@@ -264,6 +287,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
   const [pendingExport, setPendingExport] = useState<PendingExport | null>(null);
   const [exportSaving, setExportSaving] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
+  const [restartNotice, setRestartNotice] = useState<RestartNotice | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [persistSupported, setPersistSupported] = useState(false);
@@ -349,8 +373,11 @@ export function DataManagement({ onNotice }: DataManagementProps) {
         console.warn("[DataManagement] cloud restore errors:", result.errors);
       }
       const errorNote = result.errors.length > 0 ? `，${result.errors.length} 项出错` : "";
-      const firstError = result.errors[0] ? `首个错误：${result.errors[0]}。` : "";
-      return `已从云端恢复：新增 ${result.added}，覆盖 ${result.overwritten}，跳过 ${result.skipped}${errorNote}。${firstError}请刷新应用让缓存重新载入。`;
+      const firstError = result.errors[0] ? `\n首个错误：${result.errors[0]}` : "";
+      setRestartNotice({
+        title: "恢复完成，请彻底重启应用",
+        summary: `已从云端恢复：新增 ${result.added}，覆盖 ${result.overwritten}，跳过 ${result.skipped}${errorNote}。${firstError}`,
+      });
     } finally {
       setCloudProgress(null);
     }
@@ -494,11 +521,10 @@ export function DataManagement({ onNotice }: DataManagementProps) {
     const result: ImportResult = await importBackupBlob(pendingImport.file, moduleIds, { overwrite });
     setPendingImport(null);
     const summary = `导入完成：新增 ${result.added}，跳过 ${result.skipped}，覆盖 ${result.overwritten}`;
-    if (result.errors.length > 0) {
-      const firstError = result.errors[0] ? `首个错误：${result.errors[0]}。` : "";
-      return `${summary}。错误 ${result.errors.length} 个，${firstError}建议刷新后检查。`;
-    }
-    return `${summary}。请刷新应用让缓存重新载入。`;
+    const errorNote = result.errors.length > 0
+      ? `，错误 ${result.errors.length} 个${result.errors[0] ? `\n首个错误：${result.errors[0]}` : ""}`
+      : "";
+    setRestartNotice({ title: "导入完成，请彻底重启应用", summary: `${summary}${errorNote}。` });
   });
 
   const handlePersist = () => runAction("申请保护", async () => {
@@ -528,8 +554,8 @@ export function DataManagement({ onNotice }: DataManagementProps) {
   const executeClearSelected = (moduleIds: DataModuleId[]) => runAction("清理中", async () => {
     const result = await clearModules(moduleIds);
     setSelectedClearModules([]);
-    if (result.errors.length > 0) return `已清理 ${result.removed} 项，另有 ${result.errors.length} 个错误。`;
-    return `已清理 ${result.removed} 项。请刷新应用让缓存重新载入。`;
+    const errorNote = result.errors.length > 0 ? `，另有 ${result.errors.length} 个错误` : "";
+    setRestartNotice({ title: "清理完成，请彻底重启应用", summary: `已清理 ${result.removed} 项${errorNote}。` });
   });
 
   const executeMediaMaintenance = () => runAction("媒体清理中", async () => {
@@ -1036,6 +1062,39 @@ export function DataManagement({ onNotice }: DataManagementProps) {
           onConfirm={() => { const pending = restorePending; setRestorePending(null); if (pending) void confirmRestore(pending); }}
           onCancel={() => setRestorePending(null)}
         />
+      )}
+
+      {/* 不给遮罩挂 onClick：这条必须让用户显式选一个，误触关掉就等于没提示过。 */}
+      {restartNotice && (
+        <div className="modal-overlay" data-ui="modal">
+          <div className="modal-dialog" data-ui="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header" data-ui="modal-header">
+              <div className="ui-icon-circle"><RotateCcw size={20} /></div>
+              <h3 className="modal-title">{restartNotice.title}</h3>
+            </div>
+            <div className="modal-body" data-ui="modal-body" style={{ textAlign: "left", width: "100%" }}>
+              <p style={{ whiteSpace: "pre-line" }}>{buildRestartMessage(restartNotice.summary)}</p>
+            </div>
+            <div className="modal-footer" data-ui="modal-footer" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button
+                type="button"
+                className="ui-btn ui-btn-primary"
+                style={{ width: "100%", whiteSpace: "nowrap" }}
+                onClick={() => window.location.reload()}
+              >
+                <RotateCcw size={16} /> 立即重启
+              </button>
+              <button
+                type="button"
+                className="ui-btn ui-btn-outline"
+                style={{ width: "100%", whiteSpace: "nowrap" }}
+                onClick={() => setRestartNotice(null)}
+              >
+                稍后自己重启
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

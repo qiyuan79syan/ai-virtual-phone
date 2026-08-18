@@ -1,5 +1,6 @@
 -- Supabase SQL for 独家特调（mixology）酒单 / 大厅 / 社交。
--- Run this once in the Supabase SQL editor.
+-- Run this once in the SQL editor of the DEDICATED mixology Supabase project
+-- (MIXOLOGY_SUPABASE_URL / MIXOLOGY_SUPABASE_SERVICE_ROLE_KEY)，不是账号 / session 用的主库。
 --
 -- mixology_items    酒单：共享材料（十一类，payload 为完整材料 JSON）
 -- mixology_recipes  大厅：共享特调配方（materials 存槽位引用数组，不内嵌材料本体）
