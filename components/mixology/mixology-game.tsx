@@ -237,13 +237,22 @@ export function MixologyGame({ sessionId, onBack, onToast }: GameProps) {
         el.scrollTop = stickRef.current === "top" ? 0 : el.scrollHeight;
     }, []);
 
-    /** 这一局有没有人开过口——只有开场白的局算「还没开始」 */
-    const chatted = useMemo(() => (session?.turns ?? []).some((turn) => turn.role === "user"), [session?.turns]);
-
+    /**
+     * 进对局定一次落点：没人开过口的局停在扉页顶上（开场画布要从头看），聊过的停在最新一条上。
+     * 只认 sessionId——定完就撒手，后面翻页（free）和发言（bottom）都能改它，这里不再回头覆盖。
+     * 以前这个 effect 还挂着 busy 和 turns.length：一发言 busy 先翻 true，而用户那一轮要等
+     * 落杯前钩子跑完才落库，这一拍读到的还是「没人开过口」，于是把人拽回了扉页顶上。
+     */
     useEffect(() => {
-        stickRef.current = chatted ? "bottom" : "top";
+        const entered = getMixSession(sessionId);
+        stickRef.current = (entered?.turns ?? []).some((turn) => turn.role === "user") ? "bottom" : "top";
         applyStick();
-    }, [sessionId, chatted, session?.turns.length, busy, applyStick]);
+    }, [sessionId, applyStick]);
+
+    /** 内容长高了（新一轮到达、生成态切换）按当前落点再落一次 */
+    useEffect(() => {
+        applyStick();
+    }, [session?.turns.length, busy, applyStick]);
 
     /**
      * 开场画布是沙盒 iframe，高度由画布自己异步报上来：挂载那一刻它还只有几十像素，
@@ -301,21 +310,22 @@ export function MixologyGame({ sessionId, onBack, onToast }: GameProps) {
         );
     }
 
-    const run = async (action: (signal: AbortSignal) => Promise<unknown>) => {
+    const run = async (action: (signal: AbortSignal, commit: () => void) => Promise<unknown>) => {
         if (busy) return;
         const controller = new AbortController();
         abortRef.current = controller;
         setBusy(true);
         busyRef.current = true;
+        const commit = () => setSession(getMixSession(sessionId));
         try {
-            const pending = action(controller.signal);
-            // 引擎的同步部分已经落库（重说删掉旧轮 / 发送写入用户消息），
-            // 立刻回读让界面先变，不等模型回来才一起刷
-            setSession(getMixSession(sessionId));
+            const pending = action(controller.signal, commit);
+            // 重说/回溯那几条在第一个 await 之前就落库了，立刻回读让界面先变；
+            // 发送那条的落库晚于这一拍（落杯前钩子是异步的），由引擎回调 commit 补上
+            commit();
             await pending;
-            setSession(getMixSession(sessionId));
+            commit();
         } catch (error) {
-            setSession(getMixSession(sessionId));
+            commit();
             const message = error instanceof Error ? error.message : "生成失败，请重试。";
             if (!controller.signal.aborted) onToast(message);
         } finally {
@@ -328,13 +338,17 @@ export function MixologyGame({ sessionId, onBack, onToast }: GameProps) {
         const text = input.trim();
         if (!text) return;
         setInput("");
-        void run((signal) => generateMixReply(sessionId, text, signal));
+        // 一开口就把落点钉到底：用户那一轮要等落杯前钩子跑完才落库，
+        // 这中间界面还是「没人开过口」的样子，不钉住就会被拽回扉页顶上
+        stickRef.current = "bottom";
+        void run((signal, commit) => generateMixReply(sessionId, text, signal, commit));
     };
 
     /** 界面以玩家身份发一句话：走的是和输入框一模一样的路径，不是特权通道 */
     const handlePanelSay = useCallback((text: string) => {
         if (busyRef.current) return;
-        void run((signal) => generateMixReply(sessionId, text, signal));
+        stickRef.current = "bottom";
+        void run((signal, commit) => generateMixReply(sessionId, text, signal, commit));
     }, [sessionId]);
 
     const copyTurn = (turn: MixTurn) => {

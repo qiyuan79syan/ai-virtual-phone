@@ -406,6 +406,7 @@ export async function generateMixReply(
     sessionId: string,
     userText: string,
     signal?: AbortSignal,
+    onUserTurn?: () => void,
 ): Promise<MixReplyResult> {
     const current = getMixSession(sessionId);
     if (!current) throw new ChatEngineError("对局不存在。");
@@ -423,6 +424,9 @@ export async function generateMixReply(
     };
     const withUser: MixSession = { ...before.session, turns: [...before.session.turns, userTurn] };
     saveMixSession(withUser);
+    // 落杯前钩子是 await 的，这句落库比调用方那次「同步回读」晚一拍，
+    // 所以得主动喊一声：用户气泡要在模型回来之前就上屏
+    onUserTurn?.();
     // 这条路径的落杯前已经跑过了，别在 runMixGeneration 里重复触发
     return runMixGeneration(withUser, before.note, signal, true);
 }
